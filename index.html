@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beacon Wire — Operations Dashboard</title>
+<script src="chart.umd.min.js"></script>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--ink:#1c2430;--muted:#6b7684;--line:#e3e6ea;--accent:#1f5fa8;--good:#1e8e5a;--warn:#c98a12;--bad:#c23b32}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+  header{background:#14263d;color:#fff;padding:18px 28px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
+  header h1{margin:0;font-size:20px;letter-spacing:.3px}
+  header .sub{color:#a9bbd1;font-size:12px;margin-top:2px}
+  .controls{display:flex;gap:10px;align-items:center;font-size:13px}
+  .controls input{padding:6px 8px;border-radius:6px;border:1px solid #3a5170;background:#1d3452;color:#fff}
+  .banner{background:#fff4d6;color:#7a5600;text-align:center;padding:6px;font-size:12px}
+  main{max-width:1200px;margin:0 auto;padding:20px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .kpi .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  .kpi .value{font-size:24px;font-weight:650;margin-top:6px;font-variant-numeric:tabular-nums}
+  .kpi .note{color:var(--muted);font-size:12px;margin-top:4px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h2{font-size:15px;margin:0 0 12px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .card h2 small{font-weight:400;color:var(--muted);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th{text-align:left;color:var(--muted);font-weight:500;font-size:12px;border-bottom:1px solid var(--line);padding:6px 8px}
+  td{padding:7px 8px;border-bottom:1px solid #f0f1f3}
+  td.num,th.num{text-align:right}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+  .ok{background:#e3f4ea;color:var(--good)} .low{background:#fcf0d6;color:var(--warn)} .out{background:#fbe3e1;color:var(--bad)}
+  .paid{background:#e3f4ea;color:var(--good)} .unpaid{background:#eef2f7;color:#40556f}
+  .scroll{max-height:340px;overflow:auto}
+  .filters{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .filters input,.filters select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px}
+  .empty{color:var(--muted);padding:12px 8px}
+  footer{color:var(--muted);font-size:12px;text-align:center;padding:20px}
+  canvas{max-height:280px}
+  @media (max-width:800px){.kpis{grid-template-columns:repeat(2,1fr)} .grid{grid-template-columns:1fr} main{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Beacon Wire — Operations Dashboard</h1>
+    <div class="sub">Sales, receivables, cash and inventory in one view · Cash basis</div>
+  </div>
+  <div class="controls">
+    <label for="asOf">As of</label>
+    <input type="date" id="asOf">
+  </div>
+</header>
+<div class="banner">Demo data: every customer, price, vendor and transaction shown here is made up.</div>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="grid">
+    <div class="card"><h2>Cash in vs. cash out by month <small>bank register</small></h2><canvas id="cashChart"></canvas></div>
+    <div class="card"><h2>Expenses by account <small>year to date</small></h2><canvas id="expChart"></canvas></div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>⚠ Overdue invoices <small>unpaid more than 30 days</small></h2>
+      <div class="scroll"><table id="overdue"></table></div>
+    </div>
+    <div class="card">
+      <h2>Top customers <small>invoiced, year to date</small></h2>
+      <canvas id="custChart"></canvas>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Inventory: weeks of supply <small>snapshot as of Oct 29, 2026</small></h2>
+      <div class="filters">
+        <select id="invFilter">
+          <option value="alert">Low or out of stock only</option>
+          <option value="all">All items</option>
+        </select>
+      </div>
+      <div class="scroll"><table id="inventory"></table></div>
+    </div>
+    <div class="card">
+      <h2>Invoice log</h2>
+      <div class="filters">
+        <input id="invSearch" placeholder="Search customer or invoice #">
+        <select id="invStatus"><option value="">All statuses</option><option>PAID</option><option>UNPAID</option></select>
+      </div>
+      <div class="scroll"><table id="invoices"></table></div>
+    </div>
+  </section>
+</main>
+<footer>Built from the Beacon Wire master Google Sheet · Demo copy with made-up data</footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const usd = n => (n<0?'-':'') + '$' + Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const usd0 = n => '$' + Math.round(n).toLocaleString('en-US');
+const dayDiff = (a,b) => Math.round((new Date(b) - new Date(a)) / 864e5);
+const ym = s => s.slice(0,7);
+const monthName = k => new Date(k+'-15').toLocaleString('en-US',{month:'short',year:'numeric'});
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const charts = {};
+let D;
+
+function chart(id, cfg){ if(charts[id]) charts[id].destroy(); charts[id] = new Chart($('#'+id), cfg); }
+
+function render(){
+  const asOf = $('#asOf').value;
+  const yr = asOf.slice(0,4), mo = ym(asOf);
+  const reg = D.register.filter(r => r.date <= asOf);
+  const inYr = r => r.date.slice(0,4) === yr, inMo = r => ym(r.date) === mo;
+  const sum = (arr,f) => arr.reduce((s,r)=>s+(f(r)||0),0);
+
+  const revYTD = sum(reg.filter(inYr), r=>r.in), revMTD = sum(reg.filter(inMo), r=>r.in);
+  const expYTD = sum(reg.filter(inYr), r=>r.out), expMTD = sum(reg.filter(inMo), r=>r.out);
+  const cash = reg.length ? reg[reg.length-1].balance : 0;
+
+  const invs = D.invoices.filter(i => i.date <= asOf);
+  const open = invs.filter(i => !i.paidDate || i.paidDate > asOf);
+  const ar = sum(open, i=>i.amount);
+  const overdue = open.map(i => ({...i, days: dayDiff(i.date, asOf)})).filter(i => i.days > 30).sort((a,b)=>b.days-a.days);
+  const alerts = D.inventory.filter(i => i.status !== 'OK');
+
+  const kpis = [
+    ['Cash collected (month)', usd0(revMTD), monthName(mo)],
+    ['Cash collected (YTD)', usd0(revYTD), 'Deposits in '+yr],
+    ['Expenses (YTD)', usd0(expYTD), 'COGS plus operating'],
+    ['Net income (YTD)', usd0(revYTD-expYTD), revYTD ? ((revYTD-expYTD)/revYTD*100).toFixed(1)+'% margin' : ''],
+    ['Bank balance', usd0(cash), 'US Bank #1030'],
+    ['Open AR', usd0(ar), open.length+' open invoices'],
+    ['Overdue', usd0(sum(overdue,i=>i.amount)), overdue.length+' past 30 days'],
+    ['Stock alerts', alerts.length, 'items low or out'],
+  ];
+  $('#kpis').innerHTML = kpis.map(([l,v,n]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`).join('');
+
+  // Cash by month
+  const months = [...new Set(reg.map(r=>ym(r.date)))].sort();
+  chart('cashChart', {type:'bar', data:{labels:months.map(monthName), datasets:[
+    {label:'Cash in', data:months.map(m=>sum(reg.filter(r=>ym(r.date)===m),r=>r.in)), backgroundColor:'#1e8e5a'},
+    {label:'Cash out', data:months.map(m=>sum(reg.filter(r=>ym(r.date)===m),r=>r.out)), backgroundColor:'#c23b32'}]},
+    options:{responsive:true, plugins:{tooltip:{callbacks:{label:c=>c.dataset.label+': '+usd(c.raw)}}}, scales:{y:{ticks:{callback:v=>usd0(v)}}}}});
+
+  // Expenses by account
+  const exp = {};
+  reg.filter(r=>inYr(r)&&r.out).forEach(r => { const k = r.account.replace(/^\d+\s·\s/,''); exp[k]=(exp[k]||0)+r.out; });
+  const ek = Object.keys(exp).sort((a,b)=>exp[b]-exp[a]);
+  chart('expChart', {type:'bar', data:{labels:ek, datasets:[{data:ek.map(k=>exp[k]), backgroundColor:'#1f5fa8'}]},
+    options:{indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>usd(c.raw)}}}, scales:{x:{ticks:{callback:v=>usd0(v)}}}}});
+
+  // Overdue
+  const band = d => d>90?'out':d>60?'low':'unpaid';
+  $('#overdue').innerHTML = overdue.length
+    ? '<tr><th>Invoice</th><th>Date</th><th>Customer</th><th class="num">Amount</th><th class="num">Days out</th></tr>' +
+      overdue.map(i=>`<tr><td>#${i.inv}</td><td>${i.date}</td><td>${esc(i.customer)}</td><td class="num">${usd(i.amount)}</td><td class="num"><span class="pill ${band(i.days)}">${i.days}</span></td></tr>`).join('')
+    : '<tr><td class="empty">Nothing overdue as of this date. 🎉</td></tr>';
+
+  // Top customers
+  const cs = {};
+  D.sales.filter(s=>s.date<=asOf && s.date.slice(0,4)===yr).forEach(s=>cs[s.customer]=(cs[s.customer]||0)+s.amount);
+  const ck = Object.keys(cs).sort((a,b)=>cs[b]-cs[a]).slice(0,8);
+  chart('custChart', {type:'bar', data:{labels:ck, datasets:[{data:ck.map(k=>cs[k]), backgroundColor:'#14263d'}]},
+    options:{indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>usd(c.raw)}}}, scales:{x:{ticks:{callback:v=>usd0(v)}}}}});
+
+  renderInventory(); renderInvoices();
+}
+
+function renderInventory(){
+  const all = $('#invFilter').value === 'all';
+  const cls = s => s==='OK'?'ok':s.startsWith('OUT')?'out':'low';
+  const items = D.inventory.filter(i => all || i.status !== 'OK').sort((a,b)=>(a.wos??0)-(b.wos??0));
+  $('#inventory').innerHTML = '<tr><th>Item</th><th class="num">On hand</th><th class="num">Wkly use</th><th class="num">Weeks</th><th>Status</th></tr>' +
+    items.map(i=>`<tr><td>${esc(i.item)}</td><td class="num">${(+i.onHand||0).toLocaleString('en-US',{maximumFractionDigits:1})} ${i.unit==='thousands'?'K':'lbs'}</td><td class="num">${(+i.weeklyUse||0).toLocaleString('en-US',{maximumFractionDigits:1})}</td><td class="num">${typeof i.wos==='number'?i.wos.toFixed(1):'—'}</td><td><span class="pill ${cls(i.status)}">${esc(i.status.replace(' — reorder soon',''))}</span></td></tr>`).join('');
+}
+
+function renderInvoices(){
+  const asOf = $('#asOf').value, q = $('#invSearch').value.toLowerCase(), st = $('#invStatus').value;
+  const rows = D.invoices.filter(i => i.date <= asOf).map(i => ({...i, s: (i.paidDate && i.paidDate <= asOf) ? 'PAID' : 'UNPAID'}))
+    .filter(i => (!st || i.s===st) && (!q || i.customer.toLowerCase().includes(q) || String(i.inv).includes(q)))
+    .sort((a,b)=>b.inv-a.inv);
+  $('#invoices').innerHTML = '<tr><th>#</th><th>Date</th><th>Customer</th><th class="num">Amount</th><th>Status</th></tr>' +
+    (rows.map(i=>`<tr><td>${i.inv}</td><td>${i.date}</td><td>${esc(i.customer)}</td><td class="num">${usd(i.amount)}</td><td><span class="pill ${i.s.toLowerCase()}">${i.s}</span></td></tr>`).join('') || '<tr><td colspan="5" class="empty">No matching invoices.</td></tr>');
+}
+
+fetch('data.json').then(r=>r.json()).then(data => {
+  D = data;
+  const dates = [...D.register.map(r=>r.date), ...D.invoices.map(i=>i.date)].sort();
+  $('#asOf').value = dates[dates.length-1];
+  $('#asOf').min = dates[0]; $('#asOf').max = dates[dates.length-1];
+  $('#asOf').addEventListener('change', render);
+  $('#invFilter').addEventListener('change', renderInventory);
+  $('#invSearch').addEventListener('input', renderInvoices);
+  $('#invStatus').addEventListener('change', renderInvoices);
+  render();
+}).catch(() => { document.querySelector('main').innerHTML = '<p class="empty">Could not load data.json.</p>'; });
+</script>
+</body>
+</html>
